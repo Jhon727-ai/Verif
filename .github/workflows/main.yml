@@ -51,49 +51,49 @@ jobs:
           if (-not $tsIP) { Write-Error "Tailscale IP not assigned."; exit 1 }
           echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
 
-      # ==================== OPTIMIZED DOCKER FOR LINUX CONTAINER ====================
-      - name: Enable Linux Containers on Docker
+      # ==================== INSTALL NODE.JS + n8n ====================
+      - name: Install Node.js and n8n
         run: |
-          Write-Host "Switching Docker to Linux containers mode..."
-          & "C:\Program Files\Docker\Docker\Docker Desktop.exe" --switch-to-linux 2>$null || echo "Switch command not available, trying alternative..."
+          Write-Host "Installing Node.js..."
+          $nodeUrl = "https://nodejs.org/dist/v20.18.0/node-v20.18.0-win-x64.zip"
+          $nodeZip = "$env:TEMP\node.zip"
+          $nodePath = "C:\nodejs"
           
-          # Tunggu Docker siap
-          $timeout = 60
-          $timer = 0
-          while ($timer -lt $timeout) {
-              if (docker info 2>$null) {
-                  Write-Host "Docker is ready!"
-                  break
-              }
-              Start-Sleep -Seconds 5
-              $timer += 5
+          Invoke-WebRequest -Uri $nodeUrl -OutFile $nodeZip
+          Expand-Archive -Path $nodeZip -DestinationPath $env:TEMP -Force
+          Move-Item -Path "$env:TEMP\node-v20.18.0-win-x64" -Destination $nodePath -Force
+          
+          # Tambah ke PATH
+          echo "$nodePath" | Out-File -Append -FilePath $env:GITHUB_PATH
+          echo "$nodePath\npm" | Out-File -Append -FilePath $env:GITHUB_PATH
+          
+          Write-Host "Installing n8n globally..."
+          npm install -g n8n
+          
+          Write-Host "✅ n8n installed successfully"
+
+      - name: Start n8n
+        run: |
+          Write-Host "Starting n8n in background..."
+          $n8nJob = Start-Job -ScriptBlock {
+              n8n start
           }
+          Start-Sleep -Seconds 10
+          Write-Host "n8n should be running on port 5678"
 
-      - name: Run n8n
+      - name: Verify Services
         run: |
-          Write-Host "Pulling and starting n8n..."
-          docker run -d `
-            --name n8n `
-            --restart unless-stopped `
-            -p 5678:5678 `
-            -v n8n_data:/home/node/.n8n `
-            docker.n8n.io/n8nio/n8n
-
-          Write-Host "✅ n8n container started"
-
-      - name: Verify
-        run: |
-          Write-Host "`n=== ACCESS INFO ==="
-          Write-Host "RDP IP     : $env:TAILSCALE_IP"
-          Write-Host "Username   : $env:RDP_USER"
-          Write-Host "Password   : $env:RDP_PASS"
-          Write-Host "n8n URL    : http://$env:TAILSCALE_IP:5678"
-          Write-Host "`nDocker Containers:"
-          docker ps
+          Write-Host "`n=== ACCESS INFORMATION ==="
+          Write-Host "RDP Address : $env:TAILSCALE_IP"
+          Write-Host "Username    : $env:RDP_USER"
+          Write-Host "Password    : $env:RDP_PASS"
+          Write-Host "n8n URL     : http://$env:TAILSCALE_IP:5678"
+          Write-Host "`nCheck if n8n is running:"
+          Get-Process -Name "*node*" -ErrorAction SilentlyContinue
 
       - name: Maintain Connection
         run: |
           while ($true) {
-              Write-Host "[$(Get-Date)] RDP + n8n Active"
+              Write-Host "[$(Get-Date)] RDP + n8n is Active - Access via Tailscale"
               Start-Sleep -Seconds 300
           }
