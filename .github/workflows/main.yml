@@ -1,0 +1,133 @@
+name: RDP
+
+on:
+  workflow_dispatch:
+
+jobs:
+  secure-rdp:
+    runs-on: windows-2025
+    timeout-minutes: 3600
+    steps:
+      - name: Configure Core RDP Settings
+        run: |
+          # Enable Remote Desktop
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
+                             -Name "fDenyTSConnections" -Value 0 -Force
+          # Require Network Level Authentication
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
+                             -Name "UserAuthentication" -Value 1 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
+                             -Name "SecurityLayer" -Value 1 -Force
+          # Firewall rule for RDP
+          netsh advfirewall firewall delete rule name="RDP-Tailscale" -ErrorAction SilentlyContinue
+          netsh advfirewall firewall add rule name="RDP-Tailscale" `
+            dir=in action=allow protocol=TCP localport=3389
+          Restart-Service -Name TermService -Force
+
+      - name: Configure runneradmin for RDP
+        run: |
+          $username = "runneradmin"
+          $password = "P@ssw0rd123!" # ⚠️ Ganti dengan GitHub Secret yang lebih aman
+          Enable-LocalUser -Name $username
+          Set-LocalUser -Name $username -Password (ConvertTo-SecureString -AsPlainText $password -Force)
+          Add-LocalGroupMember -Group "Administrators" -Member $username -ErrorAction SilentlyContinue
+          
+          echo "RDP_USER=$username" >> $env:GITHUB_ENV
+          echo "RDP_PASS=$password" >> $env:GITHUB_ENV
+
+      - name: Install Tailscale
+        run: |
+          $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
+          $installerPath = "$env:TEMP\tailscale.msi"
+          
+          Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
+          Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
+          Remove-Item $installerPath -Force
+
+      - name: Establish Tailscale Connection
+        run: |
+          & "$env:ProgramFiles\Tailscale\tailscale.exe" up --authkey=${{ secrets.TAILSCALE_AUTH_KEY }} --hostname=gh-runner-$env:GITHUB_RUN_ID
+          
+          $tsIP = $null
+          $retries = 0
+          while (-not $tsIP -and $retries -lt 10) {
+              $tsIP = & "$env:ProgramFiles\Tailscale\tailscale.exe" ip -4
+              Start-Sleep -Seconds 5
+              $retries++
+          }
+          
+          if (-not $tsIP) {
+              Write-Error "Tailscale IP not assigned. Exiting."
+              exit 1
+          }
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+
+      # ==================== TAMBAHAN: INSTALL DOCKER ====================
+      - name: Install Docker Desktop
+        run: |
+          Write-Host "Downloading Docker Desktop..."
+          $dockerUrl = "https://desktop.docker.com/win/main/amd64/Docker%20Desktop%20Installer.exe"
+          $installerPath = "$env:TEMP\DockerDesktopInstaller.exe"
+          
+          Invoke-WebRequest -Uri $dockerUrl -OutFile $installerPath
+          
+          Write-Host "Installing Docker Desktop..."
+          Start-Process -FilePath $installerPath -ArgumentList "install", "--quiet", "--accept-license" -Wait
+          
+          # Tambahkan Docker ke PATH
+          $env:Path += ";C:\Program Files\Docker\Docker\resources\bin"
+          echo "C:\Program Files\Docker\Docker\resources\bin" | Out-File -Append -FilePath $env:GITHUB_PATH
+          
+          Remove-Item $installerPath -Force
+
+      - name: Start Docker Service
+        run: |
+          Write-Host "Starting Docker Desktop..."
+          Start-Process "C:\Program Files\Docker\Docker\Docker Desktop.exe" -NoNewWindow -PassThru
+          
+          # Tunggu Docker siap
+          $timeout = 120
+          $timer = 0
+          while (-not (docker info 2>$null)) {
+              Start-Sleep -Seconds 5
+              $timer += 5
+              if ($timer -gt $timeout) {
+                  Write-Error "Docker failed to start within timeout"
+                  exit 1
+              }
+          }
+          Write-Host "Docker is ready!"
+
+      # ==================== TAMBAHAN: RUN n8n ====================
+      - name: Run n8n with Docker
+        run: |
+          Write-Host "Starting n8n..."
+          
+          docker run -d `
+            --name n8n `
+            --restart unless-stopped `
+            -p 5678:5678 `
+            -v n8n_data:/home/node/.n8n `
+            docker.n8n.io/n8nio/n8n
+          
+          Write-Host "n8n is running on port 5678"
+
+      # ==================== VERIFY ====================
+      - name: Verify Services
+        run: |
+          Write-Host "`n=== SERVICE STATUS ==="
+          Write-Host "Docker version: $(docker --version)"
+          docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+          Write-Host "`n=== RDP ACCESS ==="
+          Write-Host "Address     : $env:TAILSCALE_IP"
+          Write-Host "Username    : $env:RDP_USER"
+          Write-Host "Password    : $env:RDP_PASS"
+          Write-Host "n8n URL     : http://$env:TAILSCALE_IP:5678"
+          Write-Host "==================`n"
+
+      - name: Maintain Connection
+        run: |
+          while ($true) {
+              Write-Host "[$(Get-Date)] RDP + Docker + n8n Active - Use Ctrl+C to stop workflow"
+              Start-Sleep -Seconds 300
+          }
