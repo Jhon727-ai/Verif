@@ -51,61 +51,49 @@ jobs:
           if (-not $tsIP) { Write-Error "Tailscale IP not assigned."; exit 1 }
           echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
 
-      # ==================== WSL2 + DOCKER FIX ====================
-      - name: Setup WSL2 + Docker
+      # ==================== OPTIMIZED DOCKER FOR LINUX CONTAINER ====================
+      - name: Enable Linux Containers on Docker
         run: |
-          Write-Host "Enabling WSL2..."
-          wsl --install --no-distribution
-          wsl --set-default-version 2
-
-          Write-Host "Installing Ubuntu..."
-          wsl --install -d Ubuntu
-
-          Write-Host "Waiting for WSL to be ready..."
-          Start-Sleep -Seconds 15
-
-          Write-Host "Installing Docker inside WSL (Ubuntu)..."
-          wsl -d Ubuntu -u root bash -c '
-            apt-get update -qq && apt-get upgrade -y -qq
-            apt-get install -y ca-certificates curl
-            install -m 0755 -d /etc/apt/keyrings
-            curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
-            chmod a+r /etc/apt/keyrings/docker.asc
-            echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
-            apt-get update -qq
-            apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-            service docker start
-            echo "Docker installed and started in WSL"
-          '
-
-      - name: Run n8n in WSL
-        run: |
-          Write-Host "Starting n8n container inside WSL..."
-          wsl -d Ubuntu -u root bash -c '
-            docker run -d \
-              --name n8n \
-              --restart unless-stopped \
-              -p 5678:5678 \
-              -v n8n_data:/home/node/.n8n \
-              docker.n8n.io/n8nio/n8n
-          '
-          Write-Host "✅ n8n started successfully"
-
-      - name: Verify Services
-        run: |
-          Write-Host "`n=== STATUS ==="
-          wsl -d Ubuntu docker ps
+          Write-Host "Switching Docker to Linux containers mode..."
+          & "C:\Program Files\Docker\Docker\Docker Desktop.exe" --switch-to-linux 2>$null || echo "Switch command not available, trying alternative..."
           
-          Write-Host "`n=== ACCESS ==="
-          Write-Host "RDP       : $env:TAILSCALE_IP"
-          Write-Host "Username  : $env:RDP_USER"
-          Write-Host "Password  : $env:RDP_PASS"
-          Write-Host "n8n URL   : http://$env:TAILSCALE_IP:5678"
-          Write-Host "==================`n"
+          # Tunggu Docker siap
+          $timeout = 60
+          $timer = 0
+          while ($timer -lt $timeout) {
+              if (docker info 2>$null) {
+                  Write-Host "Docker is ready!"
+                  break
+              }
+              Start-Sleep -Seconds 5
+              $timer += 5
+          }
+
+      - name: Run n8n
+        run: |
+          Write-Host "Pulling and starting n8n..."
+          docker run -d `
+            --name n8n `
+            --restart unless-stopped `
+            -p 5678:5678 `
+            -v n8n_data:/home/node/.n8n `
+            docker.n8n.io/n8nio/n8n
+
+          Write-Host "✅ n8n container started"
+
+      - name: Verify
+        run: |
+          Write-Host "`n=== ACCESS INFO ==="
+          Write-Host "RDP IP     : $env:TAILSCALE_IP"
+          Write-Host "Username   : $env:RDP_USER"
+          Write-Host "Password   : $env:RDP_PASS"
+          Write-Host "n8n URL    : http://$env:TAILSCALE_IP:5678"
+          Write-Host "`nDocker Containers:"
+          docker ps
 
       - name: Maintain Connection
         run: |
           while ($true) {
-              Write-Host "[$(Get-Date)] RDP + n8n (WSL) is running..."
+              Write-Host "[$(Get-Date)] RDP + n8n Active"
               Start-Sleep -Seconds 300
           }
