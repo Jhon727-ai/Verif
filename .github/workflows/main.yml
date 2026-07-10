@@ -51,29 +51,36 @@ jobs:
           if (-not $tsIP) { Write-Error "Tailscale IP not assigned."; exit 1 }
           echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
 
-      - name: Setup WSL2 + Docker for n8n
+      # ==================== WSL2 + DOCKER FIX ====================
+      - name: Setup WSL2 + Docker
         run: |
-          Write-Host "Installing WSL2 and Ubuntu..."
-          wsl --install -d Ubuntu -y
+          Write-Host "Enabling WSL2..."
+          wsl --install --no-distribution
           wsl --set-default-version 2
-          wsl --update
 
-          Write-Host "Installing Docker inside WSL..."
+          Write-Host "Installing Ubuntu..."
+          wsl --install -d Ubuntu
+
+          Write-Host "Waiting for WSL to be ready..."
+          Start-Sleep -Seconds 15
+
+          Write-Host "Installing Docker inside WSL (Ubuntu)..."
           wsl -d Ubuntu -u root bash -c '
-            apt-get update && apt-get install -y ca-certificates curl
+            apt-get update -qq && apt-get upgrade -y -qq
+            apt-get install -y ca-certificates curl
             install -m 0755 -d /etc/apt/keyrings
             curl -fsSL https://download.docker.com/linux/ubuntu/gpg -o /etc/apt/keyrings/docker.asc
             chmod a+r /etc/apt/keyrings/docker.asc
             echo "deb [arch=$(dpkg --print-architecture) signed-by=/etc/apt/keyrings/docker.asc] https://download.docker.com/linux/ubuntu $(. /etc/os-release && echo $VERSION_CODENAME) stable" | tee /etc/apt/sources.list.d/docker.list > /dev/null
-            apt-get update
+            apt-get update -qq
             apt-get install -y docker-ce docker-ce-cli containerd.io docker-buildx-plugin docker-compose-plugin
-            usermod -aG docker node 2>/dev/null || true
             service docker start
+            echo "Docker installed and started in WSL"
           '
 
       - name: Run n8n in WSL
         run: |
-          Write-Host "Starting n8n in WSL..."
+          Write-Host "Starting n8n container inside WSL..."
           wsl -d Ubuntu -u root bash -c '
             docker run -d \
               --name n8n \
@@ -82,24 +89,23 @@ jobs:
               -v n8n_data:/home/node/.n8n \
               docker.n8n.io/n8nio/n8n
           '
-          Write-Host "✅ n8n is running inside WSL on port 5678"
+          Write-Host "✅ n8n started successfully"
 
       - name: Verify Services
         run: |
           Write-Host "`n=== STATUS ==="
-          Write-Host "Docker on Host : $(docker --version)"
-          wsl -d Ubuntu docker ps --format "table {{.Names}}\t{{.Status}}\t{{.Ports}}"
+          wsl -d Ubuntu docker ps
           
-          Write-Host "`n=== ACCESS INFO ==="
-          Write-Host "RDP Address : $env:TAILSCALE_IP"
-          Write-Host "Username    : $env:RDP_USER"
-          Write-Host "Password    : $env:RDP_PASS"
-          Write-Host "n8n URL     : http://$env:TAILSCALE_IP:5678"
+          Write-Host "`n=== ACCESS ==="
+          Write-Host "RDP       : $env:TAILSCALE_IP"
+          Write-Host "Username  : $env:RDP_USER"
+          Write-Host "Password  : $env:RDP_PASS"
+          Write-Host "n8n URL   : http://$env:TAILSCALE_IP:5678"
           Write-Host "==================`n"
 
       - name: Maintain Connection
         run: |
           while ($true) {
-              Write-Host "[$(Get-Date)] RDP + n8n (WSL) Active"
+              Write-Host "[$(Get-Date)] RDP + n8n (WSL) is running..."
               Start-Sleep -Seconds 300
           }
