@@ -1,3 +1,4 @@
+
 name: RDP
 
 on:
@@ -7,25 +8,42 @@ jobs:
   secure-rdp:
     runs-on: windows-2025
     timeout-minutes: 3600
+
     steps:
       - name: Configure Core RDP Settings
         run: |
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' -Name "fDenyTSConnections" -Value 0 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "UserAuthentication" -Value 1 -Force
-          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' -Name "SecurityLayer" -Value 1 -Force
-          
-          netsh advfirewall firewall delete rule name="RDP-Tailscale" -ErrorAction SilentlyContinue
-          netsh advfirewall firewall add rule name="RDP-Tailscale" dir=in action=allow protocol=TCP localport=3389
-          Restart-Service -Name TermService -Force
+          # Enable Remote Desktop
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server' `
+                             -Name "fDenyTSConnections" -Value 0 -Force
 
+          # Require Network Level Authentication
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
+                             -Name "UserAuthentication" -Value 1 -Force
+          Set-ItemProperty -Path 'HKLM:\System\CurrentControlSet\Control\Terminal Server\WinStations\RDP-Tcp' `
+                             -Name "SecurityLayer" -Value 1 -Force
+
+          # Firewall rule for RDP
+          netsh advfirewall firewall delete rule name="RDP-Tailscale"
+          netsh advfirewall firewall add rule name="RDP-Tailscale" `
+            dir=in action=allow protocol=TCP localport=3389
+
+          Restart-Service -Name TermService -Force
+      
       - name: Configure runneradmin for RDP
         run: |
           $username = "runneradmin"
-          $password = "P@ssw0rd123!"
+          $password = "P@ssw0rd123!"  # ⚠️ Change this or use a GitHub secret
+
+          # Enable account (in case it’s disabled)
           Enable-LocalUser -Name $username
+
+          # Set password
           Set-LocalUser -Name $username -Password (ConvertTo-SecureString -AsPlainText $password -Force)
+
+          # Ensure account has Administrator rights
           Add-LocalGroupMember -Group "Administrators" -Member $username -ErrorAction SilentlyContinue
-          
+
+          # Export credentials to env vars
           echo "RDP_USER=$username" >> $env:GITHUB_ENV
           echo "RDP_PASS=$password" >> $env:GITHUB_ENV
 
@@ -33,6 +51,7 @@ jobs:
         run: |
           $tsUrl = "https://pkgs.tailscale.com/stable/tailscale-setup-1.82.0-amd64.msi"
           $installerPath = "$env:TEMP\tailscale.msi"
+          
           Invoke-WebRequest -Uri $tsUrl -OutFile $installerPath
           Start-Process msiexec.exe -ArgumentList "/i", "`"$installerPath`"", "/quiet", "/norestart" -Wait
           Remove-Item $installerPath -Force
@@ -48,52 +67,32 @@ jobs:
               Start-Sleep -Seconds 5
               $retries++
           }
-          if (-not $tsIP) { Write-Error "Tailscale IP not assigned."; exit 1 }
-          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
-
-      # ==================== INSTALL NODE.JS + n8n ====================
-      - name: Install Node.js and n8n
-        run: |
-          Write-Host "Installing Node.js..."
-          $nodeUrl = "https://nodejs.org/dist/v20.18.0/node-v20.18.0-win-x64.zip"
-          $nodeZip = "$env:TEMP\node.zip"
-          $nodePath = "C:\nodejs"
           
-          Invoke-WebRequest -Uri $nodeUrl -OutFile $nodeZip
-          Expand-Archive -Path $nodeZip -DestinationPath $env:TEMP -Force
-          Move-Item -Path "$env:TEMP\node-v20.18.0-win-x64" -Destination $nodePath -Force
-          
-          # Tambah ke PATH
-          echo "$nodePath" | Out-File -Append -FilePath $env:GITHUB_PATH
-          echo "$nodePath\npm" | Out-File -Append -FilePath $env:GITHUB_PATH
-          
-          Write-Host "Installing n8n globally..."
-          npm install -g n8n
-          
-          Write-Host "✅ n8n installed successfully"
-
-      - name: Start n8n
-        run: |
-          Write-Host "Starting n8n in background..."
-          $n8nJob = Start-Job -ScriptBlock {
-              n8n start
+          if (-not $tsIP) {
+              Write-Error "Tailscale IP not assigned. Exiting."
+              exit 1
           }
-          Start-Sleep -Seconds 10
-          Write-Host "n8n should be running on port 5678"
-
-      - name: Verify Services
+          echo "TAILSCALE_IP=$tsIP" >> $env:GITHUB_ENV
+      
+      - name: Verify RDP Accessibility
         run: |
-          Write-Host "`n=== ACCESS INFORMATION ==="
-          Write-Host "RDP Address : $env:TAILSCALE_IP"
-          Write-Host "Username    : $env:RDP_USER"
-          Write-Host "Password    : $env:RDP_PASS"
-          Write-Host "n8n URL     : http://$env:TAILSCALE_IP:5678"
-          Write-Host "`nCheck if n8n is running:"
-          Get-Process -Name "*node*" -ErrorAction SilentlyContinue
+          Write-Host "Tailscale IP: $env:TAILSCALE_IP"
+          $testResult = Test-NetConnection -ComputerName $env:TAILSCALE_IP -Port 3389
+          if (-not $testResult.TcpTestSucceeded) {
+              Write-Error "TCP connection to RDP port 3389 failed"
+              exit 1
+          }
+          Write-Host "TCP connectivity successful!"
 
       - name: Maintain Connection
         run: |
+          Write-Host "`n=== RDP ACCESS ==="
+          Write-Host "Address: $env:TAILSCALE_IP"
+          Write-Host "Username: $env:RDP_USER"
+          Write-Host "Password: $env:RDP_PASS"
+          Write-Host "==================`n"
+          
           while ($true) {
-              Write-Host "[$(Get-Date)] RDP + n8n is Active - Access via Tailscale"
+              Write-Host "[$(Get-Date)] RDP Active - Use Ctrl+C in workflow to terminate"
               Start-Sleep -Seconds 300
           }
